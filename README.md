@@ -39,5 +39,10 @@ Periférico de entrada principal utilizado para la gestión de modos, velocidade
 
 * **CAMBIO DE MODO:** Un botón *toggle* permitirá cambiar entre los modos Tracking, Manual o Fijo.
 * **BOTONES DE DIRECCIÓN:** Dos botones que funcionarán como comandos de izquierda y derecha para orientar la estructura de forma manual paso a paso, únicamente cuando el Modo Manual esté activo.
-* **POSICIONES O ÁNGULOS FIJOS:** Teclas numéricas asignadas
-* **BOTÓN DE RESET:** Botón que simula una posición “0” o “Home” de calibración inicial.
+* **POSICIONES O ÁNGULOS FIJOS:** Teclas numéricas asignadas a valores angulares preestablecidos (ej. $45^{\circ}$, $90^{\circ}$, 180°). Al presionarlas en Modo Fijo, el motor se desplazará a dicha posición.
+* **BOTÓN DE RESET:** Botón que simula una posición "0" o "Home" de calibración inicial.
+
+
+
+> [!NOTE]
+> **IMPORTANTE:** La idea central del trabajo es rotar el sistema para maximizar la luz que recibe un panel solar. Actualmente, se compró un panel solar a través de TEMU, pero debido a que no se conoce con claridad la fecha de entrega, se propondrá un valor de voltaje generado arbitrario en función de la luz recibida por las fotorresistencias para las simulaciones y pruebas iniciales.
