@@ -7,6 +7,8 @@
 #include "lpc17xx_timer.h"
 #include "lpc17xx_systick.h"
 
+//-----------------------DECLARACIONES Y DEFINES VARIOS PARA EL MOTOR--------------------------------------
+
 // DEFINES PARA LA DIRECCION DEL MOTOR
 #define DIRECCION_RELOJ   1
 #define DIRECCION_CONTRA  0
@@ -53,69 +55,86 @@ void Stepper_Init(void);
 void Stepper_Step(uint8_t direction);
 void Stepper_MoveToAngle(uint16_t angulo_destino);
 
+//-----------------------DECLARACIONESS Y DEFINES VARIOS PARA EL TECLADO--------------------------------------
+
+// ENUMS PARA LAS MASCARAS DEL TECLADO CON LOS PINES INVERTIDOS
+typedef enum
+{
+    // COLUMNAS EN J6-11 A J6-14 (AHORA SON ENTRADAS CON INTERRUPCION)
+    TECLADO_COL_1  = (1 << PIN_18),  // P0[18]
+    TECLADO_COL_2  = (1 << PIN_17),  // P0[17]
+    TECLADO_COL_3  = (1 << PIN_15),  // P0[15]
+    TECLADO_COL_4  = (1 << PIN_16),  // P0[16]
+
+    // FILAS EN J6-15 A J6-18 (AHORA SON SALIDAS DIGITALES)
+    TECLADO_FILA_1 = (1 << PIN_23),  // P0[23]
+    TECLADO_FILA_2 = (1 << PIN_24),  // P0[24]
+    TECLADO_FILA_3 = (1 << PIN_25),  // P0[25]
+    TECLADO_FILA_4 = (1 << PIN_26)   // P0[26]
+} MaskTeclado;
+
+// MASCARAS AGRUPADAS ACTUALIZADAS CON EL INTERCAMBIO
+#define TECLADO_FILAS (TECLADO_FILA_1 | TECLADO_FILA_2 | TECLADO_FILA_3 | TECLADO_FILA_4)
+#define TECLADO_COLUMNAS  (TECLADO_COL_1 | TECLADO_COL_2 | TECLADO_COL_3 | TECLADO_COL_4)
+
+// VARIABLE GLOBAL PARA GUARDAR LA TECLA DETECTADA
+volatile uint8_t tecla_presionada = 0;
+
+// DECLARACION DE FUNCIONES
+void Teclado_Init(void);
+uint8_t Teclado_Scan(void);
+
+//-----------------------DECLARACIONES Y AUXILIARES PARA UART--------------------------------------
+void UART0_InitConsole(void);
+void UART0_SendString(char* str);
+void UART0_SendNumber(uint8_t num);
 
 int main(void)
 {
-    // VARIABLES AUXILIARES PARA EL CONTEO DE TIEMPO DE ESPERA EN HOME
-    uint16_t contador_espera_home = 0;
-    uint16_t angulo_actual_test = 0;
-
-    // INICIALIZO EL STEP
+    // INITIALIZAMOS EL MOTOR Y EL TECLADO MATRICIAL
     Stepper_Init();
+    Teclado_Init();
 
-    // INICIALIZO EL SYSTICK A 4 MS
-    SYSTICK_InternalInit(4);
-    SYSTICK_Cmd(ENABLE);
+    // INICIALIZAMOS EL PERIFERICO UART0 A 9600 BAUDIOS
+    UART0_InitConsole();
 
-    // --- PRIMERA ETAPA: PERMANECER EN HOME 5 SEGUNDOS ---
-    // 5000MS / 4MS POR DISPARO = 1250 CONTEOS DE LA BANDERA DEL SYSTICK
-    while (contador_espera_home < 500)
+    // MENSAJE DE BIENVENIDA PARA CHEQUEAR QUE LA UART COMIENCE BIEN
+    UART0_SendString("CONSOLA INICIALIZADA. PRESIONE UNA TECLA...\n\r");
+
+    while(1)
     {
-        if (SYSTICK_HasFired() == SET)
+        // VERIFICAMOS SI LA INTERRUPCION CAPTURO ALGUN EVENTO DEL TECLADO
+        if (tecla_presionada != 0)
         {
-            contador_espera_home++;
-            SYSTICK_ClearCounterFlag();
+            // ENVIAMOS UN ENCABEZADO DE TEXTO POR UART
+            UART0_SendString("TECLA DETECTADA: ");
+
+            // ENVIAMOS EL NUMERO ENTERO (1 AL 16) TRANSFORMA EN TEXTO ASCCI
+            UART0_SendNumber(tecla_presionada);
+
+            // ENVIAMOS UN SALTO DE LINEA Y RETORNO DE CARRO
+            UART0_SendString("\n\r");
+
+            // CONSUMIMOS LA TECLA VOLVIENDOLA A PONE EN 0 PARA ESPERAR EL PROXIMO EVENTO
+            tecla_presionada = 0;
         }
     }
-
-    // --- SEGUNDA ETAPA: AVANZAR DE A 90 GRADOS HACIA LA DERECHA HASTA LA VUELTA COMPLETA ---
-    // INCREMENTAMOS EL ANGULO DE 90 EN 90 HASTA LLEGAR A LOS 360 GRADOS ABSOLUTOS
-    while(1){
-
-
-    while (angulo_actual_test < 360)
-    {
-        angulo_actual_test = angulo_actual_test + 90;
-        Stepper_MoveToAngle(angulo_actual_test);
-
-        // ADVERTENCIA OPCIONAL: EN CASO DE QUERER VER CADA TRAMO DE 90 GRADOS DE MANERA AISLADA
-        // SE PODRIA CLAVAR OTRO PEQUEÑO BUCLE DE ESPERA DEL SYSTICK AQUI
-    }
-
-    // --- TERCERA ETAPA: VOLVER TOTALMENTE HACIA LA IZQUIERDA HASTA LA POSICION 0 ---
-    // RETORNAMOS EL MOTOR DIRECTAMENTE A SU COORDENADA DE CALIBRACION INICIAL (HOME)
-    Stepper_MoveToAngle(0);
-	}
-
     return 0 ;
 }
 
 
 void Stepper_Init()
 {
-    // CONFIGURO LOS PINES DE CONTROL: P0[9]->J6-5 | P0[8] ->J6-6 | P0[7]->J6-7 | P0[6]->J6-8
+    PINSEL_CFG_T pinConfig;
 
-    // PRIMERO HAGO PINSEL:
-    PINSEL_CFG_T pinConfig; //
-
-    pinConfig.port = PORT_0; //
+    pinConfig.port = PORT_0;
     pinConfig.func = PINSEL_FUNC_00;
     pinConfig.mode = PINSEL_PULLUP;
     pinConfig.openDrain = DISABLE;
 
-    PINSEL_ConfigMultiplePins(&pinConfig, ALL_MOTOR_PINS); //
+    PINSEL_ConfigMultiplePins(&pinConfig, ALL_MOTOR_PINS);
 
-    GPIO_SetDir(PORT_0, ALL_MOTOR_PINS, GPIO_OUTPUT); //
+    GPIO_SetDir(PORT_0, ALL_MOTOR_PINS, GPIO_OUTPUT);
 
     GPIO_ClearPins(PORT_0, ALL_MOTOR_PINS);
 
@@ -124,53 +143,38 @@ void Stepper_Init()
 
 void Stepper_Step(uint8_t direccion)
 {
-    // VARIABLE SABER CUAL ES EL PASO ELECTRICO DE LA MATRIZ
     static uint8_t step_actual = 0;
 
-    // CALCULAR EL SIGUIENTE ESTADO DE LA SECUENCIA CIRCULAR (0 A 3)
     if (direccion == DIRECCION_RELOJ)
     {
-        // AVANZA EN LA SECUENCIA Y SE MANTIENE ENTRE 0 Y 3
         step_actual = (step_actual + 1) % 4;
-
-        // INCREMENTA EL CONTADOR DE POSICION ABSOLUTO DEL SISTEMA
         cant_steps++;
     }
     else
     {
         if (step_actual == 0)
         {
-            step_actual = 3; // SI ESTABA EN 0, VUELVE AL PASO MAXIMO
+            step_actual = 3;
         }
         else
         {
-            step_actual = step_actual - 1; // SI NO, RESTA UN PASO NORMALMENTE
+            step_actual = step_actual - 1;
         }
-
-        // DECREMENTA EL CONTADOR DE POSICION ABSOLUTO DEL SISTEMA
         cant_steps--;
     }
 
-    // APAGAR TODAS LAS BOBINAS DEL MOTOR ANTES DE APLICAR EL NUEVO PASO PARA NO TENER PROBLEMAS
-    GPIO_ClearPins(PORT_0, ALL_MOTOR_PINS); // [cite: 308]
-
-    // PRENDO UNICAMENTE LAS BOBINAS QUE CORRESPONDEN AL PASO ACTUAL.
+    GPIO_ClearPins(PORT_0, ALL_MOTOR_PINS);
     GPIO_SetPins(PORT_0, secuencia_stepper[step_actual]);
 }
 
 void Stepper_MoveToAngle(uint16_t angulo_destino)
 {
-
-    //CALCULO BIEN LA CANT DE PASOS A LA QUE QUIERO LLEGAR, LA FORMULA ES ASI PARA EVITAR FLOATS Y USAR ENTEROS
     uint16_t paso_objetivo = ((angulo_destino * MOTOR_PASOS_NUM) + (MOTOR_PASOS_DEN / 2)) / MOTOR_PASOS_DEN;
 
-    // WHILE PROVISIONAL PARA TESTEAR, POR AHORA BLOQUEA PERO NO IMPORTA, DSP SE ACTUALIZA
     while (cant_steps != paso_objetivo)
     {
-        // CHEQUEO SI SALTO O NO EL SYSTYCK (SI SALTO PASARON LOS 4MS DE CALIBRACION PA LAS BOBINA)
-        if (SYSTICK_HasFired() == SET) //
+        if (SYSTICK_HasFired() == SET)
         {
-            // DETERMINAMOS EL SENTIDO DE GIRO MAS CORTO HACIA EL OBJETIVO
             if (cant_steps < paso_objetivo)
             {
                 Stepper_Step(DIRECCION_RELOJ);
@@ -179,9 +183,145 @@ void Stepper_MoveToAngle(uint16_t angulo_destino)
             {
                 Stepper_Step(DIRECCION_CONTRA);
             }
-
-            // LIMPIO LA BANDERA DEL SYSTICK
             SYSTICK_ClearCounterFlag();
         }
     }
+}
+
+void Teclado_Init(void)
+{
+    PINSEL_CFG_T tecladoPinConfig;
+
+    tecladoPinConfig.port = PORT_0;
+    tecladoPinConfig.func = PINSEL_FUNC_00;
+    tecladoPinConfig.mode = PINSEL_PULLUP;
+    tecladoPinConfig.openDrain = DISABLE;
+
+    PINSEL_ConfigMultiplePins(&tecladoPinConfig, TECLADO_FILAS);
+    PINSEL_ConfigMultiplePins(&tecladoPinConfig, TECLADO_COLUMNAS);
+
+    // SE INVIERTEN LAS DIRECCIONES DE LOS GRUPOS DE PINES
+    GPIO_SetDir(PORT_0, TECLADO_FILAS, GPIO_OUTPUT);    // FILAS (J6-15 A 18) AHORA SON SALIDAS
+    GPIO_SetDir(PORT_0, TECLADO_COLUMNAS, GPIO_INPUT);  // COLUMNAS (J6-11 A 14) AHORA SON ENTRADAS
+
+    // DEJAMOS TODAS LAS FILAS EN 0 LOGICO EN EL REPOSO
+    GPIO_ClearPins(PORT_0, TECLADO_FILAS);
+
+    // LA INTERRUPCION DE FLANCO DESCENDENTE SE PASA A LAS NUEVAS COLUMNAS (P0.15, P0.16, P0.17, P0.18)
+    GPIO_IntConfigPort(PORT_0, TECLADO_COLUMNAS, GPIO_INT_FALLING);
+
+    NVIC_ClearPendingIRQ(EINT3_IRQn);
+    NVIC_EnableIRQ(EINT3_IRQn);
+}
+
+uint8_t Teclado_Scan(void)
+{
+    static const uint8_t mapa_teclas[4][4] =
+    {
+        {1,  2,  3,  4},
+        {5,  6,  7,  8},
+        {9,  10, 11, 12},
+        {13, 14, 15, 16}
+    };
+
+    // SE ACTUALIZAN LOS ARREGLOS CON LAS NUEVAS ASIGNACIONES DE PINES
+    uint32_t filas[4] = {TECLADO_FILA_1, TECLADO_FILA_2, TECLADO_FILA_3, TECLADO_FILA_4};
+    uint32_t columnas[4] = {TECLADO_COL_1, TECLADO_COL_2, TECLADO_COL_3, TECLADO_COL_4};
+    uint8_t tecla_local = 0;
+
+    // SE LEVANTAN LAS FILAS A 1 LOGICO PARA INICIAR BARRIDO
+    GPIO_SetPins(PORT_0, TECLADO_FILAS);
+
+    for (uint8_t f = 0; f < 4; f++)
+    {
+        // PASO LA FILA EVALUADA A 0 LOGICO
+        GPIO_ClearPins(PORT_0, filas[f]);
+
+        for (uint8_t c = 0; c < 4; c++)
+        {
+            if ((GPIO_ReadValue(PORT_0) & columnas[c]) == 0)
+            {
+                tecla_local = mapa_teclas[f][c];
+                break;
+            }
+        }
+
+        GPIO_SetPins(PORT_0, filas[f]);
+
+        if (tecla_local != 0)
+        {
+            break;
+        }
+    }
+
+    // REESTABLEZCO LAS FILAS EN BAJO PARA LA PROXIMA INTERRUPCION
+    GPIO_ClearPins(PORT_0, TECLADO_FILAS);
+    return tecla_local;
+}
+
+void EINT3_IRQHandler(void)
+{
+    if (GPIO_GetPortIntStatus(PORT_0) == SET)
+    {
+        // COMPRUEBO LAS NUEVAS COLUMNAS EN EL MANEJADOR (PIN_15, PIN_16, PIN_17, PIN_18)
+        if (GPIO_GetPinIntStatus(PORT_0, PIN_18, GPIO_INT_FALLING) == SET ||
+            GPIO_GetPinIntStatus(PORT_0, PIN_17, GPIO_INT_FALLING) == SET ||
+            GPIO_GetPinIntStatus(PORT_0, PIN_15, GPIO_INT_FALLING) == SET ||
+            GPIO_GetPinIntStatus(PORT_0, PIN_16, GPIO_INT_FALLING) == SET)
+        {
+            tecla_presionada = Teclado_Scan();
+
+            // SE LIMPIAN LAS BANDERAS DE LA INTERRUPCION DE LAS NUEVAS COLUMNAS
+            GPIO_ClearInt(PORT_0, TECLADO_COLUMNAS);
+        }
+    }
+}
+
+//-----------------------IMPLEMENTACIONES AUXILIARES PARA EL MODULO UART--------------------------------------
+
+void UART0_InitConsole(void)
+{
+    UART_CFG_T uartConfig;
+
+    UART_PinConfig(UART_TX0_P0_2);
+    UART_PinConfig(UART_RX0_P0_3);
+
+    uartConfig.baudRate = 9600;
+    uartConfig.dataBits = UART_DBITS_8;
+    uartConfig.parity   = UART_PARITY_NONE;
+    uartConfig.stopBits = UART_STOPBIT_1;
+
+    UART_Init(UART0, &uartConfig);
+    UART_TxEnable(UART0);
+}
+
+void UART0_SendString(char* str)
+{
+    uint32_t longitud = 0;
+
+    while (str[longitud] != '\0')
+    {
+        longitud++;
+    }
+
+    UART_Send(UART0, (uint8_t*)str, longitud, BLOCKING);
+}
+
+void UART0_SendNumber(uint8_t num)
+{
+    char buffer_ascci[4];
+
+    if (num >= 10)
+    {
+        buffer_ascci[0] = (num / 10) + '0';
+        buffer_ascci[1] = (num % 10) + '0';
+        buffer_ascci[2] = '\0';
+    }
+    else
+    {
+        buffer_ascci[0] = num + '0';
+        buffer_ascci[1] = '\0';
+    }
+
+    UART0_SendString(buffer_ascci);
 }
