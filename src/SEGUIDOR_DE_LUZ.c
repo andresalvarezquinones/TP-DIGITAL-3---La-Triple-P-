@@ -84,44 +84,64 @@ volatile uint8_t tecla_presionada = 0;
 void Teclado_Init(void);
 uint8_t Teclado_Scan(void);
 
+//-----------------------DECLARACIONESS Y DEFINES VARIOS PARA EL ADC-------------------------------------
+
+// SUPONEMOS UN PANEL DE 5V (5000 mV)
+#define PANEL_VMAX_MV  5000
+
+void ADC_Config(void);
+uint16_t ADC_Leer_Canal(ADC_CHANNEL);
+uint16_t Calcular_Voltaje_Panel(uint16_t);
+
+
 //-----------------------DECLARACIONES Y AUXILIARES PARA UART--------------------------------------
 void UART0_InitConsole(void);
 void UART0_SendString(char* str);
-void UART0_SendNumber(uint8_t num);
+void UART0_SendNumber(uint16_t num); // ACTUALIZADO A UINT16_T
 
+
+//-----------------------CODIGO MAIN--------------------------------------
 int main(void)
 {
-    // INITIALIZAMOS EL MOTOR Y EL TECLADO MATRICIAL
+    uint16_t luz_derecha = 0;
+    uint16_t luz_izquierda = 0;
+    uint16_t luz_promedio = 0;
+    uint16_t voltaje_panel = 0;
+
+    // INICIALIZAMOS TODOS LOS PERIFERICOS
     Stepper_Init();
     Teclado_Init();
-
-    // INICIALIZAMOS EL PERIFERICO UART0 A 9600 BAUDIOS
+    ADC_Config();
     UART0_InitConsole();
 
-    // MENSAJE DE BIENVENIDA PARA CHEQUEAR QUE LA UART COMIENCE BIEN
-    UART0_SendString("CONSOLA INICIALIZADA. PRESIONE UNA TECLA...\n\r");
+    UART0_SendString("CONSOLA INICIALIZADA. LEYENDO ADC...\n\r");
 
     while(1)
     {
-        // VERIFICAMOS SI LA INTERRUPCION CAPTURO ALGUN EVENTO DEL TECLADO
-        if (tecla_presionada != 0)
-        {
-            // ENVIAMOS UN ENCABEZADO DE TEXTO POR UART
-            UART0_SendString("TECLA DETECTADA: ");
+        // LEEMOS LOS CANALES 4 Y 5 (PUERTO 1) DE FORMA CONTINUA
+        luz_derecha = ADC_Leer_Canal(ADC_CHANNEL_4);
+        luz_izquierda = ADC_Leer_Canal(ADC_CHANNEL_5);
 
-            // ENVIAMOS EL NUMERO ENTERO (1 AL 16) TRANSFORMA EN TEXTO ASCCI
-            UART0_SendNumber(tecla_presionada);
+        luz_promedio = (luz_derecha + luz_izquierda) / 2;
+        voltaje_panel = Calcular_Voltaje_Panel(luz_promedio);
 
-            // ENVIAMOS UN SALTO DE LINEA Y RETORNO DE CARRO
-            UART0_SendString("\n\r");
+        // IMPRIMIMOS AL TOQUE
+        UART0_SendString("DERECHA: ");
+        UART0_SendNumber(luz_derecha);
+        UART0_SendString(" | IZQUIERDA: ");
+        UART0_SendNumber(luz_izquierda);
+        UART0_SendString(" | VOLTAJEPROMEDIO: ");
+        UART0_SendNumber(voltaje_panel);
+        UART0_SendString("\n\r");
 
-            // CONSUMIMOS LA TECLA VOLVIENDOLA A PONE EN 0 PARA ESPERAR EL PROXIMO EVENTO
-            tecla_presionada = 0;
-        }
+        // UN PEQUEÑO RETARDO MANUAL PARA PODER LEER LA PANTALLA
+        for(volatile uint32_t i = 0; i < 2000000; i++);
     }
-    return 0 ;
+
+    return 0;
 }
 
+//-----------------------IMPLEMENTACIONES--------------------------------------
 
 void Stepper_Init()
 {
@@ -277,21 +297,68 @@ void EINT3_IRQHandler(void)
     }
 }
 
+void ADC_Config(void)
+{
+    ADC_Init(100000);
+    ADC_PinConfig(ADC_CHANNEL_4);
+    ADC_PinConfig(ADC_CHANNEL_5);
+}
+
+uint16_t ADC_Leer_Canal(ADC_CHANNEL canal)
+{
+    uint16_t valor_adc = 0;
+
+    //PRENDO EL CANAL SEGUN PARAMETRO
+    ADC_ChannelEnable(canal);
+
+    //MANDO A CONVERTIR
+    ADC_StartCmd(ADC_START_NOW);
+
+    //METO UN WHILE HASTA QUE TERMINE
+    while (ADC_ChannelGetStatus(canal, ADC_DATA_DONE) == RESET)
+    {
+        // BUCLE CORTO DE 10US
+    }
+
+    // GUARDO DATOS UY DE PASO LIMPIO BANDERA
+    valor_adc = ADC_ChannelGetData(canal);
+
+    ADC_ChannelDisable(canal); //APAGO EL CANAL DE NUEVO
+
+    // DEVUEVLO EL VALOR MEDIDO
+    return valor_adc;
+}
+
+uint16_t Calcular_Voltaje_Panel(uint16_t valor_adc)
+{
+    // MULTIPLICAMOS PRIMERO, SUMAMOS EL REDONDEO (CUANDO SUMO LA MITAD DEL DENOM. REDONDEO DE LA FORMA NATURAL) Y DIVIDIMOS AL FINAL
+    // USAMOS UINT32_T TEMPORALMENTE PORQUE 4095 * 5000 = 20.475.000 (DESBORDA 16 BITS)
+    uint32_t calculo = ((uint32_t)valor_adc * PANEL_VMAX_MV) + (4095 / 2);
+
+    return (uint16_t)(calculo / 4095);
+}
+
+
 //-----------------------IMPLEMENTACIONES AUXILIARES PARA EL MODULO UART--------------------------------------
 
 void UART0_InitConsole(void)
 {
     UART_CFG_T uartConfig;
 
+    // CONFIGURAMOS LOS PINES FISICOS DE LA UART0 (P0.2 COMO TX0 Y P0.3 COMO RX0)
     UART_PinConfig(UART_TX0_P0_2);
     UART_PinConfig(UART_RX0_P0_3);
 
+    // RELLENAMOS LA ESTRUCTURA DE CONFIGURACION REQUERIDA POR EL DRIVER
     uartConfig.baudRate = 9600;
     uartConfig.dataBits = UART_DBITS_8;
     uartConfig.parity   = UART_PARITY_NONE;
     uartConfig.stopBits = UART_STOPBIT_1;
 
+    // INICIALIZAMOS EL PERIFERICO
     UART_Init(UART0, &uartConfig);
+
+    // ACTIVAMOS LA CAPACIDAD DE TRANSMISION DEL PERIFERICO UART0
     UART_TxEnable(UART0);
 }
 
@@ -299,29 +366,63 @@ void UART0_SendString(char* str)
 {
     uint32_t longitud = 0;
 
+    // CALCULAMOS LA LONGITUD DE LA CADENA DE TEXTO HASTA ENCONTRAR EL CARACTER NULO
     while (str[longitud] != '\0')
     {
         longitud++;
     }
 
+    // MANDAMOS EL BLOQUE COMPLETO EN MODO BLOCKING
     UART_Send(UART0, (uint8_t*)str, longitud, BLOCKING);
 }
 
-void UART0_SendNumber(uint8_t num)
+void UART0_SendNumber(uint16_t num) // AHORA RECIBE UINT16_T (HASTA 65535)
 {
-    char buffer_ascci[4];
+    char buffer_ascci[6]; // CAPACIDAD PARA 5 DIGITOS MAS EL CARACTER NULO
+    char buffer_invertido[6];
+    uint8_t i = 0;
+    uint8_t j = 0;
 
-    if (num >= 10)
+    // CASO ESPECIAL SI EL NUMERO ES EXACTAMENTE 0
+    if (num == 0)
     {
-        buffer_ascci[0] = (num / 10) + '0';
-        buffer_ascci[1] = (num % 10) + '0';
-        buffer_ascci[2] = '\0';
-    }
-    else
-    {
-        buffer_ascci[0] = num + '0';
+        buffer_ascci[0] = '0';
         buffer_ascci[1] = '\0';
+        UART0_SendString(buffer_ascci);
+        return;
     }
 
+    // EXTRAEMOS LOS DIGITOS MATEMATICAMENTE (QUEDAN AL REVES EN EL BUFFER)
+    while (num > 0)
+    {
+        buffer_invertido[i] = (num % 10) + '0'; // EXTRAE EL ULTIMO DIGITO Y LO PASA A ASCII
+        num = num / 10;                         // ACHICA EL NUMERO
+        i++;
+    }
+
+    // INVERTIMOS EL ORDEN PARA QUE SE PUEDA IMPRIMIR BIEN EN LA PANTALLA
+    while (i > 0)
+    {
+        i--;
+        buffer_ascci[j] = buffer_invertido[i];
+        j++;
+    }
+
+    // CERRAMOS EL STRING
+    buffer_ascci[j] = '\0';
+
+    // ENVIAMOS EL TEXTO RESULTANTE POR LA UART
     UART0_SendString(buffer_ascci);
 }
+
+
+
+
+
+
+
+
+
+
+
+
