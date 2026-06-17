@@ -13,9 +13,9 @@
 #ifndef _CRP_H_INCLUDED_
 #define _CRP_H_INCLUDED_
 
-// A macro for placing data into the Code Read Protect (CRP) section, 
+// A macro for placing data into the Code Read Protect (CRP) section,
 // which is then located at the correct address for the selected MCU
-// by the automatically generated linker script. The CRP section should 
+// by the automatically generated linker script. The CRP section should
 // contain a single 32-bit value which is the CRP value. See appropriate
 // documentation for the MCU to determine CRP values.
 //
@@ -25,13 +25,13 @@
 // Example:
 //        __CRP const uint32_t CRP_WORD = CRP_NO_CRP ;
 //
-#define __CRP __attribute__ ((used,section(".crp")))
+#define __CRP __attribute__((used, section(".crp")))
 
-#define CRP_NO_CRP          0xFFFFFFFF
+#define CRP_NO_CRP 0xFFFFFFFF
 
 // Disables UART and USB In System Programming (reads and writes)
 // Leaves SWD debugging, with reads and writes, enabled
-#define CRP_NO_ISP    0x4E697370
+#define CRP_NO_ISP 0x4E697370
 
 // Disables SWD debugging & JTAG, leaves ISP with with reads and writes enabled
 // You will need UART connectivity and FlashMagic (flashmagictool.com) to reverse
@@ -40,14 +40,14 @@
 // Allows reads and writes only to RAM above 0x10000300 and flash other than
 // sector 0 (the first 4 kB). Full erase also allowed- again only through UART
 // and FlashMagic (NO JTAG/SWD)
-#define CRP_CRP1      0x12345678
+#define CRP_CRP1 0x12345678
 
 // Disables SWD debugging & JTAG, leaves UART ISP with with only full erase
 // enabled. You must have UART access and FlashMagic before setting this
 // option.
 // Don't even try this without these tools; most likely the SWD flash
 // programming will not even complete.
-#define CRP_CRP2      0x87654321
+#define CRP_CRP2 0x87654321
 
 /************************************************************/
 /**** DANGER CRP3 WILL LOCK PART TO ALL READS and WRITES ****/
@@ -78,5 +78,4 @@
 #define CURRENT_CRP_SETTING CRP_NO_CRP
 #endif
 
- 
 #endif /* _CRP_H_INCLUDED_ */

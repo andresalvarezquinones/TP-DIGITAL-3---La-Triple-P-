@@ -49,7 +49,8 @@ static void SYSTICK_PinConfig(void);
 /* ------------------- End of Private Function Prototypes ------------------- */
 
 /* --------------------------- Private Functions ---------------------------- */
-static void SYSTICK_PinConfig(void) {
+static void SYSTICK_PinConfig(void)
+{
     LPC_PINCON->PINSEL7 &= ~(0x3 << ST_PIN_PCB_POS);
     LPC_PINCON->PINSEL7 |= (0x1 << ST_PIN_PCB_POS);
 
@@ -63,12 +64,16 @@ static void SYSTICK_PinConfig(void) {
  * @{
  */
 
-void SYSTICK_InternalInit(uint32_t time) {
+void SYSTICK_InternalInit(uint32_t time)
+{
     const uint32_t ticksPerMs = SystemCoreClock / 1000;
 
-    if (time > (ST_MAX_LOAD / ticksPerMs)) {
+    if (time > (ST_MAX_LOAD / ticksPerMs))
+    {
         SysTick->LOAD = ST_MAX_LOAD;
-    } else {
+    }
+    else
+    {
         SysTick->LOAD = (ticksPerMs * time) - 1;
     }
 
@@ -76,18 +81,23 @@ void SYSTICK_InternalInit(uint32_t time) {
     SysTick->CTRL |= ST_CTRL_CLKSOURCE;
 }
 
-void SYSTICK_ExternalInit(uint32_t extFreq, uint32_t time) {
+void SYSTICK_ExternalInit(uint32_t extFreq, uint32_t time)
+{
     SYSTICK_PinConfig();
 
     const uint32_t ticksPerMs = extFreq / 1000;
 
-    if (ticksPerMs == 0) {
-        return;  // Avoid division by zero if extFreq is less than 1000 Hz
+    if (ticksPerMs == 0)
+    {
+        return; // Avoid division by zero if extFreq is less than 1000 Hz
     }
 
-    if (time > (ST_MAX_LOAD / ticksPerMs)) {
+    if (time > (ST_MAX_LOAD / ticksPerMs))
+    {
         SysTick->LOAD = ST_MAX_LOAD;
-    } else {
+    }
+    else
+    {
         SysTick->LOAD = (ticksPerMs * time) - 1;
     }
 
@@ -95,22 +105,30 @@ void SYSTICK_ExternalInit(uint32_t extFreq, uint32_t time) {
     SysTick->CTRL &= ~ST_CTRL_CLKSOURCE;
 }
 
-void SYSTICK_Cmd(FunctionalState newState) {
+void SYSTICK_Cmd(FunctionalState newState)
+{
     CHECK_PARAM(PARAM_FUNCTIONALSTATE(newState));
 
-    if (newState == ENABLE) {
+    if (newState == ENABLE)
+    {
         SysTick->CTRL |= ST_CTRL_ENABLE;
-    } else {
+    }
+    else
+    {
         SysTick->CTRL &= ~ST_CTRL_ENABLE;
     }
 }
 
-void SYSTICK_IntCmd(FunctionalState newState) {
+void SYSTICK_IntCmd(FunctionalState newState)
+{
     CHECK_PARAM(PARAM_FUNCTIONALSTATE(newState));
 
-    if (newState == ENABLE) {
+    if (newState == ENABLE)
+    {
         SysTick->CTRL |= ST_CTRL_TICKINT;
-    } else {
+    }
+    else
+    {
         SysTick->CTRL &= ~ST_CTRL_TICKINT;
     }
 }

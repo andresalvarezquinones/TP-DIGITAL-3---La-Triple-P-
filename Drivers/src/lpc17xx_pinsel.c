@@ -63,7 +63,8 @@ static void PINSEL_setOpenDrainMode(uint8_t port, uint8_t pin, FunctionalState s
 /* ------------------- End of Private Function Prototypes ------------------- */
 
 /* --------------------------- Private Functions ---------------------------- */
-static void PINSEL_setPinFunc(uint8_t port, uint8_t pin, uint8_t func) {
+static void PINSEL_setPinFunc(uint8_t port, uint8_t pin, uint8_t func)
+{
     const uint32_t regIDx = 2 * port + pin / 16;
     const uint32_t pinPos = (pin % 16) * 2;
 
@@ -73,7 +74,8 @@ static void PINSEL_setPinFunc(uint8_t port, uint8_t pin, uint8_t func) {
     pPinCon[regIDx] |= (uint32_t)func << pinPos;
 }
 
-static void PINSEL_setResistorMode(uint8_t port, uint8_t pin, uint8_t mode) {
+static void PINSEL_setResistorMode(uint8_t port, uint8_t pin, uint8_t mode)
+{
     const uint32_t regIDx = (2 * port) + (pin / 16);
     const uint32_t pinPos = (pin % 16) * 2;
 
@@ -83,12 +85,16 @@ static void PINSEL_setResistorMode(uint8_t port, uint8_t pin, uint8_t mode) {
     pModeCon[regIDx] |= (uint32_t)mode << pinPos;
 }
 
-static void PINSEL_setOpenDrainMode(uint8_t port, uint8_t pin, FunctionalState state) {
+static void PINSEL_setOpenDrainMode(uint8_t port, uint8_t pin, FunctionalState state)
+{
     __IO uint32_t* pODCon = &LPC_PINCON->PINMODE_OD0;
 
-    if (state == ENABLE) {
+    if (state == ENABLE)
+    {
         pODCon[port] |= (PINSEL_OD_MASK << pin);
-    } else {
+    }
+    else
+    {
         pODCon[port] &= ~(PINSEL_OD_MASK << pin);
     }
 }
@@ -99,7 +105,8 @@ static void PINSEL_setOpenDrainMode(uint8_t port, uint8_t pin, FunctionalState s
  * @{
  */
 
-void PINSEL_ConfigPin(const PINSEL_CFG_T* pinCfg) {
+void PINSEL_ConfigPin(const PINSEL_CFG_T* pinCfg)
+{
     CHECK_PARAM(PARAM_LPC_PORT(pinCfg->port));
     CHECK_PARAM(PARAM_LPC_PIN(pinCfg->pin));
     CHECK_PARAM(PARAM_PINSEL_FUNC(pinCfg->func));
@@ -111,40 +118,50 @@ void PINSEL_ConfigPin(const PINSEL_CFG_T* pinCfg) {
     PINSEL_setOpenDrainMode(pinCfg->port, pinCfg->pin, pinCfg->openDrain);
 }
 
-void PINSEL_ConfigMultiplePins(const PINSEL_CFG_T* pinCfg, uint32_t pinMask) {
+void PINSEL_ConfigMultiplePins(const PINSEL_CFG_T* pinCfg, uint32_t pinMask)
+{
     CHECK_PARAM(PARAM_LPC_PORT(pinCfg->port));
     CHECK_PARAM(PARAM_PINSEL_FUNC(pinCfg->func));
 
     PINSEL_CFG_T tempCfg = *pinCfg;
-    for (uint8_t pin = 0; pin < 32; pin++) {
-        if (pinMask & 1U << pin) {
+    for (uint8_t pin = 0; pin < 32; pin++)
+    {
+        if (pinMask & 1U << pin)
+        {
             tempCfg.pin = pin;
             PINSEL_ConfigPin(&tempCfg);
         }
     }
 }
 
-void PINSEL_ConfigTraceFunc(FunctionalState newState) {
+void PINSEL_ConfigTraceFunc(FunctionalState newState)
+{
     CHECK_PARAM(PARAM_FUNCTIONALSTATE(newState));
 
-    if (newState == ENABLE) {
+    if (newState == ENABLE)
+    {
         LPC_PINCON->PINSEL10 |= (PINSEL_PIN_MASK << PINSEL_TRACE_POS);
-    } else {
+    }
+    else
+    {
         LPC_PINCON->PINSEL10 &= ~(PINSEL_PIN_MASK << PINSEL_TRACE_POS);
     }
 }
 
-void PINSEL_SetI2CPins(PINSEL_I2C_MODE driveMode, FunctionalState filterSlewRate) {
+void PINSEL_SetI2CPins(PINSEL_I2C_MODE driveMode, FunctionalState filterSlewRate)
+{
     CHECK_PARAM(PARAM_PINSEL_I2C_MODE(driveMode));
     CHECK_PARAM(PARAM_FUNCTIONALSTATE(filterSlewRate));
 
     uint32_t regVal = 0;
 
-    if (driveMode == PINSEL_I2C_FAST) {
+    if (driveMode == PINSEL_I2C_FAST)
+    {
         regVal = PINSEL_I2CPADCFG_SCLDRV0 | PINSEL_I2CPADCFG_SDADRV0;
     }
 
-    if (filterSlewRate == DISABLE) {
+    if (filterSlewRate == DISABLE)
+    {
         regVal = PINSEL_I2CPADCFG_SCLI2C0 | PINSEL_I2CPADCFG_SDAI2C0;
     }
 
