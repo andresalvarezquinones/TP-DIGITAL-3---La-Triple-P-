@@ -7,40 +7,7 @@
 #include "lpc17xx_timer.h"
 #include "lpc17xx_systick.h"
 #include "lpc17xx_uart.h"
-
-// --------------------------------------------------------------- DEFINES Y ENUMS DEL MOTOR ----------------------------------------------------------------------
-// DEFINES PARA LA DIRECCION DEL MOTOR
-#define DIRECCION_RELOJ   1
-#define DIRECCION_CONTRA  0
-
-#define MOTOR_NUMERADOR   4096
-#define MOTOR_DENOMINADOR 360
-
-// CANTIDAD DE PASOS PARA UN GIRO (MEDIO PASO = 4096 PASOS/360°)
-#define MAX_PASOS_360 4096
-
-typedef enum
-{
-  MOTOR_IN1 = (1 << PIN_6),  // P0[6]
-  MOTOR_IN2 = (1 << PIN_7),  // P0[7]
-  MOTOR_IN3 = (1 << PIN_8),  // P0[8]
-  MOTOR_IN4 = (1 << PIN_9)   // P0[9]
-} MotorPines;
-
-// SECUENCIA DE MEDIO PASO (8 PASOS)
-static const uint32_t secuencia_motor[8] =
-{
-  (MOTOR_IN1),
-  (MOTOR_IN4 | MOTOR_IN1),
-  (MOTOR_IN4),
-  (MOTOR_IN3 | MOTOR_IN4),
-  (MOTOR_IN3),
-  (MOTOR_IN2 | MOTOR_IN3),
-  (MOTOR_IN2),
-  (MOTOR_IN1 | MOTOR_IN2)
-};
-// MASCARA DE TODOS LOS PINES DEL MOTOR
-#define MOTOR_PINES  (MOTOR_IN1 | MOTOR_IN2 | MOTOR_IN3 | MOTOR_IN4)
+#include "motor.h"
 
 // --- DEFINES Y ENUMS DEL TECLADO ---
 // ENUMS PARA LAS MASCARAS DEL TECLADO
@@ -79,12 +46,7 @@ typedef enum
 
 // --------------------------------------------------------- VARIABLES GLOBALES ----------------------------------------------------------------------
 
-// VARIABLES GLOBALES DEL MOTOR
-static uint16_t cant_steps    = 0;   // POSICION ACTUAL (HOME = 0)
-static uint16_t paso_objetivo = 0;
-static uint8_t  step_actual   = 0;   // INDICE EN secuencia_motor[]
-
-// VARIABLES GLOBALES PARA LA TECLA DETECTADA
+// VARIABLE GLOBAL PARA LA TECLA DETECTADA
 volatile uint8_t tecla_presionada = 0;
 
 // CONTADOR PARA PRINT PERIODICO POR UART (~500ms)
@@ -149,17 +111,6 @@ static const char* Modo_Nombre (ModoMotor modo) //CHARS PARA MANDAR EN LOS CAMBI
         default:            return "???";
     }
 }
-
-// ------------------------- FUNCIONES MAGICASS (MAGICAS LA DEL MOTOR GRACIAS OPENCODE POR TANTO SABRA DIOS COMO SE MOVIA SIN DRIVERS SINO)--------------------------
-
-// MOTOR
-void     Motor_Init        (void);
-void     Motor_Paso        (uint8_t direction);
-void     Motor_MoverA      (uint16_t angulo_destino);
-void     Motor_MoverPasosRelativo (int16_t delta_pasos);
-void     Motor_Stop        (void);
-void     Motor_Resume      (void);
-uint8_t  Motor_Update      (void);
 
 // LOGICA DEL SISTEMA
 void     ProcesarTecla     (uint8_t tecla);
@@ -287,141 +238,6 @@ int main(void)
   }
 
   return 0;
-}
-
-
-// ==========================================================
-// IMPLEMENTACION DE LAS FUNCIONES
-// ==========================================================
-
-
-
-// ---------------------------------------------------------- MOTOR --------------------------------------------------------------------------------------------------------------------
-
-void Motor_Init (void)
-{
-  PINSEL_CFG_T pinConfig;
-
-  pinConfig.port      = PORT_0;
-  pinConfig.func      = PINSEL_FUNC_00;
-  pinConfig.mode      = PINSEL_PULLUP;
-  pinConfig.openDrain = DISABLE;
-
-  PINSEL_ConfigMultiplePins (&pinConfig, MOTOR_PINES);
-
-  GPIO_SetDir    (PORT_0, MOTOR_PINES, GPIO_OUTPUT);
-  GPIO_ClearPins (PORT_0, MOTOR_PINES);
-
-  // POR AHORA ES MEDIO DONDE QUIERE, CUANDO PONGA EL SENSOR DE CARRERA VA A SER EN HOME
-  GPIO_SetPins (PORT_0, secuencia_motor[0]);
-
-  // HOME ES EL CENTRO DEL RECORRIDO (180° = 2048 PASOS) PARA PODER GIRAR A AMBOS LADOS
-  cant_steps    = 2048;
-  paso_objetivo = 2048;
-}
-
-void Motor_MoverA (uint16_t angulo_destino)
-{
-  if (angulo_destino > 360)
-    {
-      angulo_destino = 360;
-    }
-
-  uint32_t calculo_base = (uint32_t)angulo_destino * MOTOR_NUMERADOR; //32 BITS TEMPORAL PARA QUE LA MULTIPLICACION NO DESBORDE
-
-  uint16_t nuevo_objetivo = (uint16_t)((calculo_base + (MOTOR_DENOMINADOR / 2)) / MOTOR_DENOMINADOR);
-  //(CUANDO SUMO LA MITAD DEL DENOM. REDONDEO DE LA FORMA NATURAL
-  // SI TENIA DECIMAL POR DEBAJO DEL 0.5 SUMARLE 0.5 SIGUE REDONDEANDO PARA ABAJO, SINO QUEDA POR ENCIMA Y REDONDEA HACIA "ARRIBA".
-
-  if (cant_steps == nuevo_objetivo)
-  {
-      return;
-  }
-
-    paso_objetivo = nuevo_objetivo;
-}
-
-void Motor_MoverPasosRelativo (int16_t delta_pasos)
-{
-  int32_t nuevo_objetivo = (int32_t)cant_steps + (int32_t)delta_pasos;
-
-  if (nuevo_objetivo > MAX_PASOS_360) nuevo_objetivo = MAX_PASOS_360;
-  if (nuevo_objetivo < 0)             nuevo_objetivo = 0;
-
-  if ((uint16_t)nuevo_objetivo == cant_steps) return;
-
-  paso_objetivo = (uint16_t)nuevo_objetivo;
-}
-
-void Motor_Paso (uint8_t direccion) //RECIBE HACIA DONDE SE TIENE QUE DAR EL PASO RELOJ O CONTRARELOJ
-{
-
-  if (direccion == DIRECCION_RELOJ)
-  {
-    // VERIFICA TOPE MAXIMO DE 360 GRADOS ANTES DE AVANZAR
-    if (cant_steps < MAX_PASOS_360)
-    {
-      step_actual = (step_actual + 1) % 8;
-      cant_steps++;
-    }
-  }
-  else
-  {
-    // VERIFICA TOPE MINIMO DE 0 GRADOS ANTES DE RETROCEDER (SIN NEGATIVOS)
-    if (cant_steps > 0)
-    {
-      if (step_actual == 0)
-      {
-        step_actual = 7;
-      }
-      else
-      {
-        step_actual = step_actual - 1;
-      }
-      cant_steps--;
-    }
-  }
-
-  // CAMBIO DIFERENCIAL: SOLO CAMBIO LOS PINES QUE NECESITO
-  uint32_t estado_actual = LPC_GPIO0->FIOPIN;
-  uint32_t nuevo_estado  = secuencia_motor[step_actual];
-
-  // Apagamos solo las bobinas que deben APAGARSE
-  LPC_GPIO0->FIOCLR = (estado_actual & ~nuevo_estado) & MOTOR_PINES;
-  // Prendemos solo las bobinas que deben PRENDERSE
-  LPC_GPIO0->FIOSET = (nuevo_estado & ~estado_actual) & MOTOR_PINES;
-}
-
-void Motor_Resume (void)
-{
-  LPC_GPIO0->FIOSET = secuencia_motor[step_actual] & MOTOR_PINES;
-}
-
-void Motor_Stop (void)
-{
-  LPC_GPIO0->FIOCLR = MOTOR_PINES;
-}
-
-uint8_t Motor_Update (void)
-{
-  // SI LLEGUE AL OBJETIVO DEVUELVO 0
-  if (cant_steps == paso_objetivo)
-  {
-    return 0;
-  }
-
-  // SI FALTA LLEGAR, DAM UN PASO
-  if (cant_steps < paso_objetivo)
-  {
-    Motor_Paso (DIRECCION_RELOJ);
-  }
-  else
-  {
-    Motor_Paso (DIRECCION_CONTRA);
-  }
-
-  // DEVUELVO 1 QUE SIGNIFICA QUE TODAVIA NO LLEGUE
-  return 1;
 }
 
 
@@ -766,8 +582,8 @@ void UART_ImprimirEntero (uint16_t valor) //FUNCION PARA PASAR DE NUMERO A STRIN
 
 void UART_ImprimirEstado (void) //ESTA FUNCION SE USA PARA ARMAR LA LINEA Y MANDAR BIEN LA INFO
 {
-    uint16_t angulo = (uint16_t)(((uint32_t)cant_steps * 360 + 2048) / 4096);
-    const char* estado = (cant_steps == paso_objetivo) ? "DETENIDO" : "MOVIENDO"; //LO DEJO EN TERNARIO NOMAS
+    uint16_t angulo = Motor_GetAngle ();
+    const char* estado = Motor_IsIdle () ? "DETENIDO" : "MOVIENDO";
 
     uint16_t adc_izq, adc_der;
     ADC_Leer_Ambos (&adc_izq, &adc_der);
