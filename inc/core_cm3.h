@@ -99,9 +99,9 @@ extern "C"
 
 #endif
 
+#include <stdint.h>       /*!< standard types definitions                      */
 #include "core_cmFunc.h"  /*!< Core Function Access                            */
 #include "core_cmInstr.h" /*!< Core Instruction Access                         */
-#include <stdint.h>       /*!< standard types definitions                      */
 
 #endif /* __CORE_CM3_H_GENERIC */
 

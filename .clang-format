@@ -24,7 +24,7 @@ BreakBeforeBraces: Allman
 FixNamespaceComments: false
 IncludeBlocks: Preserve
 IndentCaseLabels: true
-SortIncludes: true
+SortIncludes: false
 SpaceAfterCStyleCast: false
 SpaceAfterLogicalNot: false
 SpaceBeforeAssignmentOperators: true
