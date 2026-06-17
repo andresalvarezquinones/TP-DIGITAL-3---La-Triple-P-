@@ -240,19 +240,5 @@
 	</storageModule>
 	<storageModule moduleId="org.eclipse.cdt.make.core.buildtargets"/>
 	<storageModule moduleId="refreshScope"/>
-	<storageModule moduleId="scannerConfiguration">
-		<autodiscovery enabled="true" problemReportingEnabled="true" selectedProfileId=""/>
-		<scannerConfigBuildInfo instanceId="com.crt.advproject.config.exe.release.1969086413;com.crt.advproject.config.exe.release.1969086413.;com.crt.advproject.gas.exe.release.2127631828;com.crt.advproject.assembler.input.286225331">
-			<autodiscovery enabled="true" problemReportingEnabled="true" selectedProfileId="com.crt.advproject.GCCManagedMakePerProjectProfile"/>
-		</scannerConfigBuildInfo>
-		<scannerConfigBuildInfo instanceId="com.crt.advproject.config.exe.debug.1333411080;com.crt.advproject.config.exe.debug.1333411080.;com.crt.advproject.gcc.exe.debug.656550635;com.crt.advproject.compiler.input.71076310">
-			<autodiscovery enabled="true" problemReportingEnabled="true" selectedProfileId="com.crt.advproject.GCCManagedMakePerProjectProfile"/>
-		</scannerConfigBuildInfo>
-		<scannerConfigBuildInfo instanceId="com.crt.advproject.config.exe.debug.1333411080;com.crt.advproject.config.exe.debug.1333411080.;com.crt.advproject.gas.exe.debug.1023365417;com.crt.advproject.assembler.input.1829959341">
-			<autodiscovery enabled="true" problemReportingEnabled="true" selectedProfileId="com.crt.advproject.GCCManagedMakePerProjectProfile"/>
-		</scannerConfigBuildInfo>
-		<scannerConfigBuildInfo instanceId="com.crt.advproject.config.exe.release.1969086413;com.crt.advproject.config.exe.release.1969086413.;com.crt.advproject.gcc.exe.release.1653849041;com.crt.advproject.compiler.input.875898557">
-			<autodiscovery enabled="true" problemReportingEnabled="true" selectedProfileId="com.crt.advproject.GCCManagedMakePerProjectProfile"/>
-		</scannerConfigBuildInfo>
-	</storageModule>
+	<storageModule moduleId="scannerConfiguration"/>
 </cproject>

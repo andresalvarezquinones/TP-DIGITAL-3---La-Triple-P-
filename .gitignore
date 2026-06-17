@@ -1,2 +1,5 @@
 /Debug/
 /.atl/
+script_python/.venv/
+script_python/venv/
+*:Zone.Identifier
