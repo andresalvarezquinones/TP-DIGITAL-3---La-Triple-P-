@@ -1,0 +1,409 @@
+================================================================================
+PROYECTO: SEGUIDOR LUZ SOLAR - LPC1769
+PROBLEMA: ANTIRREBOTE TECLADO + AUTO-REPEAT SIN RACE CONDITIONS
+================================================================================
+
+HARDWARE
+--------
+- MCU: LPC1769 (ARM Cortex-M3, 100MHz)
+- Teclado matricial 4x4
+  - Filas (salidas): P0.23(F1), P0.24(F2), P0.25(F3), P0.26(F4)
+  - Columnas (entradas con pull-up): P0.15(C3), P0.16(C4), P0.17(C2), P0.18(C1)
+  - Reposo: todas las filas en LOW
+- Motor: 28BYJ-48 unipolar, 4096 pasos/360 grados, driver ULN2003
+  - Bobinas en P0.6(A), P0.7(B), P0.8(C), P0.9(D)
+- ADC: LDR en canales 4 y 5 (modo seguidor solar)
+- UART0: debug a 115200 baud (P0.2=TX)
+- SysTick: cada 3ms
+
+MODOS DE OPERACION
+------------------
+- MODO_MANUAL   : teclas de angulo fijo (7-14) y flechas izq/der (5/6)
+- MODO_SEGUIDOR : ADC controla el angulo automaticamente
+- MODO_FIJO     : angulo fijo, teclado bloqueado excepto modos/emergencia
+- Tecla 15 = EMERGENCIA (toggle motor on/off)
+- Tecla 16 = VELOCIDAD (toggle rapido/lento)
+
+================================================================================
+DIAGNOSTICO DEL PROBLEMA ORIGINAL
+================================================================================
+
+CAUSA RAIZ
+----------
+Dos entidades compiten por el teclado simultaneamente:
+1. EINT3 ISR: detecta flancos descendentes en columnas (reactiva)
+2. Main loop: llama Teclado_Scan() periodicamente para auto-repeat (activa)
+
+Teclado_Scan() pone filas en HIGH/LOW durante el barrido, lo cual genera
+flancos descendentes en las columnas. Si EINT3 esta configurada sobre esas
+columnas, cada llamada a Teclado_Scan() puede disparar EINT3 falsamente,
+incluso si se llamo NVIC_DisableIRQ antes, porque el pending bit GPIO se
+setea antes de que el disable surta efecto.
+
+PROBLEMAS ESPECIFICOS
+---------------------
+1. Rebotes mecanicos: el contacto oscila LOW/HIGH varias veces al presionar.
+   Cada flanco descendente dispara EINT3 → multiples impresiones por UART.
+
+2. Auto-repeat en main loop bypasea el debounce:
+   El main loop escanea cada 3ms (SysTick). Para teclas 5 y 6 (navegacion),
+   llama ProcesarTecla() antes de que TIMER0 (debounce de 30ms) confirme
+   la tecla. Resultado: la tecla se procesa 10 veces antes de la verificacion.
+
+FLUJO PROBLEMATICO (tecla 5, implementacion anterior con TIMER0):
+  T=0ms:  EINT3 → tecla_prev=5, TIMER0 arranca (30ms)
+  T=3ms:  SysTick → auto-repeat → Teclado_Scan() → 5 → ProcesarTecla(5)  ← MAL
+  T=6ms:  SysTick → auto-repeat → Teclado_Scan() → 5 → ProcesarTecla(5)  ← MAL
+  ...
+  T=30ms: TIMER0 → segunda lectura → match → tecla_presionada=5 (ya fue)
+  T=33ms: SysTick → auto-repeat → ProcesarTecla(5)  ← correcto, es auto-repeat
+
+LO QUE NO FUNCIONA
+------------------
+- NVIC_DisableIRQ al entrar en EINT3: el pending bit GPIO ya esta seteado
+  antes de que el disable surta efecto. Al re-habilitar, EINT3 dispara de nuevo.
+- TIMER0 one-shot de 30ms: el auto-repeat del main loop bypasea la verificacion.
+- Restringir auto-repeat a teclas 5/6: soluciona teclas 1-4 y 7-16, pero
+  las teclas 5 y 6 siguen sin debounce real porque el auto-repeat las procesa
+  antes de que TIMER0 verifique.
+
+================================================================================
+SOLUCION: POLLING PERIODICO CON MAQUINA DE ESTADOS
+================================================================================
+
+PRINCIPIO
+---------
+Eliminar EINT3 completamente. Una sola entidad (el main loop, via SysTick)
+controla el teclado. Sin ISRs de GPIO, Teclado_Scan() puede manipular los
+pines libremente sin efectos secundarios. El debounce y el auto-repeat se
+implementan con una maquina de estados que corre cada 3ms.
+
+ARQUITECTURA NUEVA
+------------------
+  SysTick (3ms) → Teclado_Update() → maquina de estados → tecla_presionada
+                                                                    ↓
+                                                            ProcesarTecla()
+
+Una sola entidad escribe tecla_presionada.
+Una sola entidad lee tecla_presionada.
+Sin ISRs compartidas. Sin secciones criticas. Sin volatile necesario.
+
+TIEMPOS DE LA MAQUINA DE ESTADOS (1 tick = 3ms)
+-------------------------------------------------
+  KEY_DEBOUNCE_TICKS = 10  →  30ms de debounce (elimina rebotes mecanicos)
+  KEY_HOLD_TICKS    = 100  → 300ms de retardo antes del primer auto-repeat
+  KEY_REPEAT_TICKS   = 10  →  30ms entre repeticiones de auto-repeat
+
+ESTADOS
+-------
+  KSM_IDLE      : sin tecla presionada
+  KSM_DEBOUNCE  : tecla detectada, esperando estabilizacion
+  KSM_HELD      : tecla confirmada, contando hacia el primer auto-repeat
+  KSM_REPEAT    : generando eventos de auto-repeat periodicamente
+
+TRANSICIONES
+------------
+  IDLE → DEBOUNCE          : raw != 0 (se detecto alguna tecla)
+  DEBOUNCE → IDLE          : raw cambia o va a 0 (rebote o liberacion)
+  DEBOUNCE → HELD          : misma tecla estable por DEBOUNCE_TICKS → EVENTO DE PRESION
+  HELD → IDLE              : raw != ksm_tecla (liberacion o cambio)
+  HELD → REPEAT            : tecla sostenida por HOLD_TICKS
+  REPEAT → IDLE            : raw != ksm_tecla (liberacion o cambio)
+  REPEAT → REPEAT (evento) : cada REPEAT_TICKS, solo si tecla == TECLA_IZQ o TECLA_DER
+
+================================================================================
+CODIGO COMPLETO DE LOS CAMBIOS
+================================================================================
+
+------------------------------------------------------------
+NUEVAS VARIABLES GLOBALES (agregar junto a las existentes)
+------------------------------------------------------------
+
+  typedef enum { KSM_IDLE, KSM_DEBOUNCE, KSM_HELD, KSM_REPEAT } KeySM;
+
+  #define KEY_DEBOUNCE_TICKS  10
+  #define KEY_HOLD_TICKS     100
+  #define KEY_REPEAT_TICKS    10
+
+  static KeySM   ksm_estado = KSM_IDLE;
+  static uint8_t ksm_tecla  = 0;
+  static uint8_t ksm_cnt    = 0;
+
+  // tecla_prev ya NO se necesita → eliminar
+  // tecla_presionada se mantiene (uint8_t, ya no necesita volatile)
+
+------------------------------------------------------------
+TECLADO_INIT — NUEVA VERSION (sin EINT3)
+------------------------------------------------------------
+
+  void Teclado_Init (void)
+  {
+    PINSEL_CFG_T tecladoPinConfig;
+
+    tecladoPinConfig.port      = PORT_0;
+    tecladoPinConfig.func      = PINSEL_FUNC_00;
+    tecladoPinConfig.mode      = PINSEL_PULLUP;
+    tecladoPinConfig.openDrain = DISABLE;
+
+    PINSEL_ConfigMultiplePins (&tecladoPinConfig, TECLADO_FILAS);
+    PINSEL_ConfigMultiplePins (&tecladoPinConfig, TECLADO_COLUMNAS);
+
+    GPIO_SetDir (PORT_0, TECLADO_FILAS,    GPIO_OUTPUT);
+    GPIO_SetDir (PORT_0, TECLADO_COLUMNAS, GPIO_INPUT);
+
+    GPIO_ClearPins (PORT_0, TECLADO_FILAS);
+
+    // SIN GPIO_IntConfigPort
+    // SIN NVIC_EnableIRQ(EINT3_IRQn)
+    // Teclado_Scan() puede correr libre sin efectos secundarios en EINT3
+  }
+
+------------------------------------------------------------
+TECLADO_UPDATE — FUNCION NUEVA (agregar al archivo)
+------------------------------------------------------------
+
+  void Teclado_Update (void)
+  {
+    uint8_t raw = Teclado_Scan ();
+
+    switch (ksm_estado)
+    {
+      case KSM_IDLE:
+        if (raw != 0)
+        {
+          ksm_tecla  = raw;
+          ksm_cnt    = 0;
+          ksm_estado = KSM_DEBOUNCE;
+        }
+        break;
+
+      case KSM_DEBOUNCE:
+        if (raw == ksm_tecla)
+        {
+          if (++ksm_cnt >= KEY_DEBOUNCE_TICKS)
+          {
+            tecla_presionada = ksm_tecla;   // unico evento de presion
+            ksm_cnt    = 0;
+            ksm_estado = KSM_HELD;
+          }
+        }
+        else
+        {
+          // rebote o liberacion: cualquier cambio reinicia desde IDLE
+          ksm_tecla  = 0;
+          ksm_cnt    = 0;
+          ksm_estado = KSM_IDLE;
+          // si raw != 0, el proximo tick entrara a DEBOUNCE con la nueva tecla
+        }
+        break;
+
+      case KSM_HELD:
+        if (raw != ksm_tecla)
+        {
+          ksm_tecla  = 0;
+          ksm_cnt    = 0;
+          ksm_estado = KSM_IDLE;
+        }
+        else if (++ksm_cnt >= KEY_HOLD_TICKS)
+        {
+          ksm_cnt    = 0;
+          ksm_estado = KSM_REPEAT;
+        }
+        break;
+
+      case KSM_REPEAT:
+        if (raw != ksm_tecla)
+        {
+          ksm_tecla  = 0;
+          ksm_cnt    = 0;
+          ksm_estado = KSM_IDLE;
+        }
+        else if (++ksm_cnt >= KEY_REPEAT_TICKS)
+        {
+          ksm_cnt = 0;
+          if (ksm_tecla == TECLA_IZQ || ksm_tecla == TECLA_DER)
+          {
+            tecla_presionada = ksm_tecla;   // auto-repeat solo para navegacion
+          }
+          // otras teclas: permanece en REPEAT sin generar evento
+        }
+        break;
+    }
+  }
+
+------------------------------------------------------------
+MAIN — NUEVA VERSION SIMPLIFICADA
+------------------------------------------------------------
+
+  int main (void)
+  {
+    SystemCoreClockUpdate ();
+
+    SYSTICK_InternalInit (3);
+    SYSTICK_Cmd (ENABLE);
+
+    UART_DebugInit ();
+    Motor_Init     ();
+    Teclado_Init   ();
+    ADC_Config     ();
+
+    // SIN setup de TIMER0 (ya no se necesita para debounce)
+
+    uint8_t step_divider = 0;
+
+    Motor_MoverA (180);
+
+    while (1)
+    {
+      if (SYSTICK_HasFired () == SET)
+      {
+        // TECLADO: debounce + auto-repeat, sin race conditions
+        Teclado_Update ();
+
+        if (tecla_presionada != 0)
+        {
+          ProcesarTecla (tecla_presionada);
+          tecla_presionada = 0;
+        }
+
+        // MOTOR: paso y modo seguidor
+        step_divider++;
+
+        if (motor_habilitado)
+        {
+          uint8_t debe_avanzar = velocidad_rapida ? 1 : ((step_divider & 3) == 0);
+
+          if (modo_actual == MODO_SEGUIDOR && debe_avanzar)
+          {
+            uint16_t adc_izq = ADC_Leer_Canal (ADC_CHANNEL_4);
+            uint16_t adc_der = ADC_Leer_Canal (ADC_CHANNEL_5);
+            Motor_MoverA (CalcularAnguloSeguidor (adc_izq, adc_der));
+          }
+
+          Motor_Update ();
+        }
+      }
+    }
+
+    return 0;
+  }
+
+================================================================================
+QUE ELIMINAR DEL CODIGO ORIGINAL
+================================================================================
+
+  FUNCIONES A ELIMINAR COMPLETAS:
+    - EINT3_IRQHandler()       (EINT3 ya no se usa)
+    - TIMER0_IRQHandler()      (debounce ya no usa TIMER0)
+
+  VARIABLES A ELIMINAR:
+    - volatile uint8_t tecla_prev   (era exclusiva de EINT3)
+    - uint8_t auto_repeat           (reemplazada por ksm_cnt en KSM_REPEAT)
+    - uint8_t ultima_tecla          (ya no se necesita con la nueva logica)
+
+  CODIGO A ELIMINAR EN main():
+    - Setup completo de TIMER0 (TIM_TIMERCFG_T, TIM_MATCHCFG_T, NVIC_EnableIRQ TIMER0, TIM_Disable)
+    - Bloque de auto-repeat manual (el if/else con auto_repeat--)
+    - Bloque de deteccion de tecla con ultima_tecla
+
+  LINEAS A ELIMINAR EN Teclado_Init():
+    - GPIO_IntConfigPort(PORT_0, TECLADO_COLUMNAS, GPIO_INT_FALLING)
+    - NVIC_ClearPendingIRQ(EINT3_IRQn)
+    - NVIC_EnableIRQ(EINT3_IRQn)
+
+================================================================================
+POR QUE ESTA SOLUCION NO TIENE RACE CONDITIONS
+================================================================================
+
+  Escritores de tecla_presionada : solo Teclado_Update()
+  Lectores de tecla_presionada   : solo el bloque del main loop
+
+  Ambos corren en el mismo contexto (main loop, mismo tick de SysTick).
+  No hay ISR que compita. No se necesitan secciones criticas ni volatile.
+
+  Teclado_Scan() genera flancos en columnas durante el barrido → no importa
+  porque GPIO_IntConfigPort nunca fue llamado sobre esos pines → EINT3 no
+  esta configurada para dispararlos.
+
+  Secuencia por tick (sin solapamiento posible):
+    1. Teclado_Update()    → puede escribir tecla_presionada
+    2. ProcesarTecla()     → lee y limpia tecla_presionada
+    3. Motor_Update()      → no toca el teclado
+
+================================================================================
+COMPORTAMIENTO RESULTANTE POR TIPO DE TECLA
+================================================================================
+
+  Teclas 1-4, 7-14, 15, 16 (no navegacion):
+    - Un solo evento al presionar (tras 30ms de debounce)
+    - Ningun evento aunque se mantenga presionada (KSM_REPEAT no genera eventos)
+    - Nuevo evento solo al soltar y volver a presionar
+
+  Teclas 5 (IZQ) y 6 (DER) (navegacion):
+    - Un solo evento al presionar (tras 30ms de debounce)
+    - Primer auto-repeat a los 300ms de mantenida
+    - Repeticiones cada 30ms mientras se mantiene
+    - Al soltar: KSM_REPEAT/HELD → KSM_IDLE, se detiene
+
+  Flujo correcto para tecla 5 (nueva implementacion):
+    T=0ms:   raw=5 → KSM_IDLE→KSM_DEBOUNCE
+    T=30ms:  10 ticks estables → tecla_presionada=5, KSM_DEBOUNCE→KSM_HELD
+    T=30ms:  ProcesarTecla(5) ejecutado una vez
+    T=330ms: 100 ticks en HELD → KSM_HELD→KSM_REPEAT
+    T=360ms: 10 ticks en REPEAT → tecla_presionada=5 (auto-repeat)
+    T=390ms: 10 ticks en REPEAT → tecla_presionada=5 (auto-repeat)
+    ...      cada 30ms mientras se mantiene presionada
+
+================================================================================
+TECLADO_SCAN — SIN CAMBIOS (referencia)
+================================================================================
+
+  La funcion Teclado_Scan() NO cambia. Funciona igual:
+    1. Pone todas las filas HIGH
+    2. Para cada fila: pone esa fila LOW, lee columnas, pone fila HIGH de nuevo
+    3. Al final pone todas las filas LOW (reposo)
+    4. Devuelve 0 si no hay tecla, o numero de tecla (1-16) si la hay
+
+  Mapa de teclas (fila x columna):
+    F1: [ 1][ 2][ 3][ 4]
+    F2: [ 5][ 6][ 7][ 8]
+    F3: [ 9][10][11][12]
+    F4: [13][14][15][16]
+
+  Asignacion de teclas:
+    1  = TECLA_MANUAL      modo manual
+    2  = TECLA_SEGUIDOR    modo seguidor solar
+    3  = TECLA_FIJO        modo angulo fijo
+    4  = TECLA_HOME        volver a 0 grados
+    5  = TECLA_IZQ         -5 grados (~57 pasos)
+    6  = TECLA_DER         +5 grados (~57 pasos)
+    7  = 45 grados
+    8  = 90 grados
+    9  = 135 grados
+    10 = 180 grados
+    11 = 225 grados
+    12 = 270 grados
+    13 = 315 grados
+    14 = 360 grados
+    15 = TECLA_EMERGENCIA  toggle motor on/off
+    16 = TECLA_VELOCIDAD   toggle rapido/lento
+
+================================================================================
+MOTOR — SIN CAMBIOS (referencia rapida)
+================================================================================
+
+  Secuencia medio paso (8 pasos), step_actual++ = sentido reloj:
+    0: A       1: D+A     2: D       3: C+D
+    4: C       5: B+C     6: B       7: A+B
+
+  cant_steps : posicion actual en pasos (0 a 4096)
+  paso_objetivo : destino en pasos
+  Motor_Update() : da un paso por tick hacia paso_objetivo, devuelve 1 si en movimiento
+
+  Conversion angulo → pasos:
+    pasos = round(angulo * 4096 / 360)
+    implementado con: (angulo * 4096 + 180) / 360
+
+================================================================================
+FIN DEL DOCUMENTO
+================================================================================
