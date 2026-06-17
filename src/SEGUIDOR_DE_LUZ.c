@@ -31,14 +31,13 @@ typedef enum
 #define TECLADO_COLUMNAS (TECLADO_COL_1  | TECLADO_COL_2  | TECLADO_COL_3  | TECLADO_COL_4)
 
 
-// ------------------------------------------------------- DEFINES DEL ADC ---------------------------------------------------------
-// SUPONEMOS UN PANEL DE 5V (5000 mV)
+// ----------------------------------------- DEFINES DEL ADC----------------
+// SUPONEMOS UN PANEL DE 5V
 #define PANEL_mVMAX    5000
 #define ADC_RESOLUCION 4095
 
-// ZONA MUERTA DEL SEGUIDOR: solo se mueve si la diferencia entre LDRs supera este umbral
-// (evita hunting por ruido del ADC cuando ambos sensores ven luz similar)
-#define ZONA_MUERTA_ADC 300
+// ZONA MUERTA DEL SEGUIDOR
+#define ZONA_MUERTA_ADC 150
 
 // HABILITA DMA EN EL ADC (BIT 17 DEL ADCR)
 #define ADC_CR_DMA_ENABLE ((1UL << 17))
@@ -64,10 +63,10 @@ typedef enum
   MET_REPETIR
 } MetEstado;
 
-#define KEY_DEBOUNCE_TICKS  10    // 30ms de antirrebote
-#define KEY_HOLD_TICKS     100    // 300ms antes del primer auto-repeat
-#define KEY_REPEAT_TICKS    10    // 30ms entre repeticiones
-#define KEY_QUIET_TICKS      5    // 15ms sin tecla antes de apnea
+#define KEY_DEBOUNCE_TICKS  10    // 30MS PQ EL TIMER ES DE 3MS
+#define KEY_HOLD_TICKS     100    // 300MS
+#define KEY_REPEAT_TICKS    10    // 30MS
+#define KEY_QUIET_TICKS      5    // 15MS
 
 static MetEstado met_estado = MET_REPOSO;
 static uint8_t   met_tecla  = 0;
@@ -96,7 +95,7 @@ typedef enum
 
 static ModoMotor modo_actual      = MODO_MANUAL;
 static uint8_t   motor_habilitado = 1;
-static uint8_t   velocidad_rapida = 1;    // 1 = paso cada tick, 0 = paso cada 4 ticks
+static uint8_t   velocidad_rapida = 1;    // 1 = UN PASITO , 0 = 4 PASITOS
 
 
 // DEFINES PARA EL UART
@@ -119,6 +118,7 @@ uint16_t CalcularAnguloSeguidor (uint16_t adc_izq, uint16_t adc_der);
 // TECLADO
 void     Teclado_Init (void);
 uint8_t  Teclado_Scan (void);
+void TIMER0_Init(void); //LO USO EN EL TECLADO ASI QUE ACA QUEDA
 
 // ADC
 void     ADC_Config (void);
@@ -136,7 +136,7 @@ void     UART_ImprimirEntero (uint16_t valor);
 void GPDMA_Init ();
 void ADC_DMA_Restart ();
 // ==========================================================
-//	MAINNNNNNNNNNNN (HASTA AHORA TODOS POR IA PARA TESTEAR, ESTE TIENE UN POCO DE LOS 2 PQ ME RE COSTO EL DEBOUNCE DEL TECLADO)
+//	MAINNNNNNNNNNNN
 // ==========================================================
 
 int main(void)
@@ -157,21 +157,8 @@ int main(void)
   ADC_Config     ();
   ADC_DMA_Config  ();
 
-  // --- CONFIGURAMOS TIMER0 PERIÓDICO (3ms) para antirrebote + auto-repeat ---
-  TIM_TIMERCFG_T timerCfg = {TIM_US, 1000};  // 1ms por tick
-  TIM_InitTimer (LPC_TIM0, &timerCfg);
 
-  TIM_MATCHCFG_T matchCfg;
-  matchCfg.channel    = TIM_MATCH_0;
-  matchCfg.matchValue = 3;                   // 3 ticks = 3ms (mismo período que SysTick)
-  matchCfg.intEn      = ENABLE;              // interrupción al hacer match
-  matchCfg.stopEn     = DISABLE;             // periódico: no se apaga solo
-  matchCfg.resetEn    = ENABLE;              // resetea TC al hacer match
-  matchCfg.extOpt     = TIM_NOTHING;
-  TIM_ConfigMatch (LPC_TIM0, &matchCfg);
 
-  NVIC_EnableIRQ (TIMER0_IRQn);              // habilitamos la interrupción del timer
-  TIM_Disable (LPC_TIM0);                    // arranca apagado, lo prende EINT3
 
   uint8_t  step_divider   = 0;
 
@@ -186,12 +173,12 @@ int main(void)
         tecla_presionada = 0;
       }
 
-      // --- PRINT PERIODICO POR UART (~500ms) ---
+      //PRINT PERIODICO POR UART
       if (++uart_print_tick >= 167)
       {
         uart_print_tick = 0;
 
-        // DEBUG: valores raw del ADC para identificar físicamente qué LDR es cuál
+        // DEBUG PA VER LO Q AGARRAN LAS LDT
         uint16_t dbg_izq, dbg_der;
         ADC_Leer_Ambos (&dbg_izq, &dbg_der);
         UART_Imprimir ("[DBG] ADC_IZQ=");
@@ -203,33 +190,19 @@ int main(void)
         UART_ImprimirEstado ();
       }
 
-      // --- TIMING DEL PASO: rapido (cada tick) o lento (cada 4 ticks) ---
+      //TIMING DEL PASO
       step_divider++;
 
       if (motor_habilitado)
       {
         uint8_t debe_avanzar = velocidad_rapida ? 1 : ((step_divider & 3) == 0);
 
-        // MODO SEGUIDOR: control proporcional directo sobre el diff del ADC.
-        // No usamos angulo absoluto porque causa wrap-around (0° vs 360°).
-        // El motor da un paso por tick hacia donde hay mas luz.
+        // MODO SEGUIDOR:
         if (modo_actual == MODO_SEGUIDOR && debe_avanzar)
         {
           uint16_t adc_izq, adc_der;
           ADC_Leer_Ambos (&adc_izq, &adc_der);
-
-          int16_t diff = (int16_t)adc_izq - (int16_t)adc_der;
-
-          if (diff > ZONA_MUERTA_ADC)
-          {
-            // Mas luz a la izquierda (desde frente) -> girar a la izquierda (antihorario)
-            Motor_MoverPasosRelativo (-1);
-          }
-          else if (diff < -ZONA_MUERTA_ADC)
-          {
-            // Mas luz a la derecha (desde frente) -> girar a la derecha (horario)
-            Motor_MoverPasosRelativo (1);
-          }
+          CalcularAnguloSeguidor (adc_izq, adc_der);
         }
 
         Motor_Update ();
@@ -241,13 +214,13 @@ int main(void)
 }
 
 
-// ---------------------------------------------------------------------- TECLADO ----------------------------------------------------------------------
+// ----------- TECLADO ----------------------------------------------------------------------
 
 void EINT3_IRQHandler (void)
 {
   if (GPIO_GetPortIntStatus (PORT_0) == SET)
     {
-      // COMPRUEBO LAS NUEVAS COLUMNAS EN EL MANEJADOR (PIN_15, PIN_16, PIN_17, PIN_18)
+      // COMPRUEBO LAS COLUMNAS A VER QUIEN INTERRUMPIO
       if (GPIO_GetPinIntStatus (PORT_0, PIN_18, GPIO_INT_FALLING) == SET
           || GPIO_GetPinIntStatus (PORT_0, PIN_17, GPIO_INT_FALLING) == SET
           || GPIO_GetPinIntStatus (PORT_0, PIN_15, GPIO_INT_FALLING) == SET
@@ -260,7 +233,7 @@ void EINT3_IRQHandler (void)
           GPIO_ClearInt      (PORT_0, TECLADO_COLUMNAS);
           NVIC_ClearPendingIRQ (EINT3_IRQn);
 
-          // ARRANCO TIMER0 (EL TIMER0 RE-HABILITA EINT3 AL VOLVER A REPOSO)
+          // ARRANCO TIMER0
           TIM_Enable (LPC_TIM0);
         }
     }
@@ -279,13 +252,13 @@ void Teclado_Init (void)
   PINSEL_ConfigMultiplePins (&tecladoPinConfig, TECLADO_COLUMNAS);
 
   // SE INVIERTEN LAS DIRECCIONES DE LOS GRUPOS DE PINES
-  GPIO_SetDir (PORT_0, TECLADO_FILAS,    GPIO_OUTPUT); // FILAS (J6-15 A 18) AHORA SON SALIDAS
-  GPIO_SetDir (PORT_0, TECLADO_COLUMNAS, GPIO_INPUT);  // COLUMNAS (J6-11 A 14) AHORA SON ENTRADAS
+  GPIO_SetDir (PORT_0, TECLADO_FILAS,    GPIO_OUTPUT); // FILAS AHORA SON SALIDAS
+  GPIO_SetDir (PORT_0, TECLADO_COLUMNAS, GPIO_INPUT);  // COLUMNAS AHORA SON ENTRADAS
 
-  // DEJAMOS TODAS LAS FILAS EN 0 LOGICO EN EL REPOSO
+  // FILAS EN 0
   GPIO_ClearPins (PORT_0, TECLADO_FILAS);
 
-  // LA INTERRUPCION DE FLANCO DESCENDENTE SE PASA A LAS NUEVAS COLUMNAS (P0.15, P0.16, P0.17, P0.18)
+  // LA INTERRUPCION SE PASA A LAS COLUMNAS
   GPIO_IntConfigPort (PORT_0, TECLADO_COLUMNAS, GPIO_INT_FALLING);
 
   NVIC_ClearPendingIRQ (EINT3_IRQn);
@@ -302,12 +275,12 @@ uint8_t Teclado_Scan (void)
     { 13, 14, 15, 16 }
   };
 
-  // SE ACTUALIZAN LOS ARREGLOS CON LAS NUEVAS ASIGNACIONES DE PINES
+
   uint32_t filas[4]    = { TECLADO_FILA_1, TECLADO_FILA_2, TECLADO_FILA_3, TECLADO_FILA_4 };
   uint32_t columnas[4] = { TECLADO_COL_1,  TECLADO_COL_2,  TECLADO_COL_3,  TECLADO_COL_4  };
   uint8_t  tecla_local = 0;
 
-  // SE LEVANTAN LAS FILAS A 1 LOGICO PARA INICIAR BARRIDO
+  // SE LEVANTAN LAS FILAS
   GPIO_SetPins (PORT_0, TECLADO_FILAS);
 
   for (uint8_t f = 0; f < 4; f++)
@@ -330,9 +303,29 @@ uint8_t Teclado_Scan (void)
         break;
     }
 
-  // REESTABLEZCO LAS FILAS EN BAJO PARA LA PROXIMA INTERRUPCION
+  // FILAS EN BAJO PARA LA PROX INT
   GPIO_ClearPins (PORT_0, TECLADO_FILAS);
   return tecla_local;
+}
+
+
+
+void TIMER0_Init()
+{
+   TIM_TIMERCFG_T timerCfg = {TIM_US, 1000};
+   TIM_InitTimer (LPC_TIM0, &timerCfg);
+
+   TIM_MATCHCFG_T matchCfg;
+   matchCfg.channel    = TIM_MATCH_0;
+   matchCfg.matchValue = 3;
+   matchCfg.intEn      = ENABLE;
+   matchCfg.stopEn     = DISABLE;
+   matchCfg.resetEn    = ENABLE;
+   matchCfg.extOpt     = TIM_NOTHING;
+   TIM_ConfigMatch (LPC_TIM0, &matchCfg);
+
+   NVIC_EnableIRQ (TIMER0_IRQn);
+   TIM_Disable (LPC_TIM0);
 }
 
 void TIMER0_IRQHandler (void)
@@ -351,7 +344,7 @@ void TIMER0_IRQHandler (void)
       }
       else
       {
-        // Varios ticks sin tecla → apagamos TIMER0 y reactivamos EINT3
+        // SI HAY VARIOS TICJS SIN TECLAS,APAGO TIM0 Y PRENDO EINT3
         if (++met_cnt >= KEY_QUIET_TICKS)
         {
           detener_timer = 1;
@@ -371,7 +364,7 @@ void TIMER0_IRQHandler (void)
       }
       else
       {
-        // Rebote o se soltó — reiniciamos
+        // REBOTE O SOLADO, ME VOY A REPOSO
         met_tecla  = 0;
         met_cnt    = 0;
         met_estado = MET_REPOSO;
@@ -404,7 +397,7 @@ void TIMER0_IRQHandler (void)
         met_cnt = 0;
         if (met_tecla == TECLA_IZQ || met_tecla == TECLA_DER)
         {
-          tecla_presionada = met_tecla;     // AUTO-REPEAT solo navegación
+          tecla_presionada = met_tecla;     // PARA PODER REPETIR LAS FKECHITAS ACA SI HAGO REPEAT
         }
       }
       break;
@@ -429,13 +422,13 @@ void ADC_Config (void)
   ADC_PinConfig (ADC_CHANNEL_4);
   ADC_PinConfig (ADC_CHANNEL_5);
 
-  // HABILITAMOS LOS CANALES EN EL ADCR (SEL bits) — ADC no convierte si SEL=0
+  // HABILITAMOS LOS CANALES
   ADC_ChannelEnable (ADC_CHANNEL_4);
   ADC_ChannelEnable (ADC_CHANNEL_5);
 
   ADC_BurstEnable ();
 
-  // BIT 17 DEL ADCR: habilita DMA request en el ADC
+  // BIT 17 DEL ADCR PARA DMA
   LPC_ADC->ADCR |= ADC_CR_DMA_ENABLE;
 }
 
@@ -453,23 +446,23 @@ void ADC_DMA_Config (void)
   chCfg.transferSize = 32;
   chCfg.type         = GPDMA_P2M;
 
-  chCfg.srcMemAddr   = 0;                      // fuente: periférico (ADC)
-  chCfg.dstMemAddr   = (uint32_t) adc_dma_buf; // destino: buffer en RAM
+  chCfg.srcMemAddr   = 0;
+  chCfg.dstMemAddr   = (uint32_t) adc_dma_buf;
 
   chCfg.srcConn      = GPDMA_ADC;
-  chCfg.dstConn      = 0;                      // destino en memoria, sin conexión periférica
+  chCfg.dstConn      = 0;
 
-  chCfg.src.width    = GPDMA_WORD;             // 32 bits por transferencia
-  chCfg.src.burst    = GPDMA_BSIZE_1;          // 1 transferencia por request
-  chCfg.src.increment = DISABLE;               // ADC es un registro fijo
+  chCfg.src.width    = GPDMA_WORD;             // 32 PQ MUEVO TODO ADCR
+  chCfg.src.burst    = GPDMA_BSIZE_1;
+  chCfg.src.increment = DISABLE;
 
   chCfg.dst.width    = GPDMA_WORD;
   chCfg.dst.burst    = GPDMA_BSIZE_1;
-  chCfg.dst.increment = ENABLE;                // avanza en el buffer
+  chCfg.dst.increment = ENABLE;
 
-  chCfg.intTC        = DISABLE;                // sin interrupciones
+  chCfg.intTC        = DISABLE;
   chCfg.intErr       = DISABLE;
-  chCfg.linkedList   = 0;                      // sin scatter/gather
+  chCfg.linkedList   = 0;
 
   GPDMA_SetupChannel (&chCfg);
   GPDMA_ChannelStart (GPDMA_CH_0);
@@ -504,10 +497,10 @@ void ADC_Leer_Ambos (uint16_t *izq, uint16_t *der)
 
   // PROMEDIO POR CANAL, O ÚLTIMO VALOR CONOCIDO SI NO HAY MUESTRAS
   if (count4 > 0) {
-    last_der = (uint16_t)(sum4 / count4);   // CH4 ahora se trata como DERECHA
+    last_der = (uint16_t)(sum4 / count4);   // CH4
   }
   if (count5 > 0) {
-    last_izq = (uint16_t)(sum5 / count5);   // CH5 ahora se trata como IZQUIERDA
+    last_izq = (uint16_t)(sum5 / count5);   // CH5
   }
 
   *izq = last_izq;
@@ -551,7 +544,7 @@ void UART_Imprimir (const char *str)
     UART_Send (UART0, (const uint8_t*)str, strlen (str), BLOCKING); //funcion que envia data,
 }
 
-void UART_ImprimirEntero (uint16_t valor) //FUNCION PARA PASAR DE NUMERO A STRING ASI SE PUEDE IMPRIMIR
+void UART_ImprimirEntero (uint16_t valor) //FUNCION PARA PASAR DE NUMERO A STRING ASI SE PUEDE IMPRIMIR (GENIO OPEN)
 {
     char buf[6];
     uint8_t i = 0;
@@ -605,13 +598,20 @@ void UART_ImprimirEstado (void) //ESTA FUNCION SE USA PARA ARMAR LA LINEA Y MAND
 
 uint16_t CalcularAnguloSeguidor (uint16_t adc_izq, uint16_t adc_der)
 {
-  int16_t  diff   = (int16_t)adc_izq - (int16_t)adc_der;      // -4095 .. +4095
-  int32_t  angulo = 180 + ((int32_t)diff * 180 / (int32_t)ADC_RESOLUCION);
+  int16_t diff = (int16_t)adc_izq - (int16_t)adc_der; // -4095 .. +4095
 
-  if (angulo < 0)   angulo = 0;
-  if (angulo > 360) angulo = 360;
+  if (diff > ZONA_MUERTA_ADC)
+  {
+    // SE UEVE A LA IZQ
+    Motor_MoverPasosRelativo (-1);
+  }
+  else if (diff < -ZONA_MUERTA_ADC)
+  {
+    // SE MUEVE A LA DER
+    Motor_MoverPasosRelativo (1);
+  }
 
-  return (uint16_t)angulo;
+  return Motor_GetAngle ();
 }
 
 void ProcesarTecla (uint8_t tecla)
@@ -621,7 +621,7 @@ void ProcesarTecla (uint8_t tecla)
     case TECLA_MANUAL:
       modo_actual = MODO_MANUAL;
       motor_habilitado = 1;
-      Motor_Resume ();    // re-energiza por si venia de emergencia
+      Motor_Resume ();    // POR SI VUELVO DE MODO EMERGENCIA
       UART_Imprimir ("Modo: ");
       UART_Imprimir (Modo_Nombre (modo_actual));
       UART_Imprimir ("\r\n");
